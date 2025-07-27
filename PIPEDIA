@@ -1,0 +1,188 @@
+import sys
+import os
+import pandas as pd
+import customtkinter as ctk
+from tkinter import filedialog
+
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
+
+class PipeApp(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        self.title("Pipe Dimension Information App")
+        self.geometry("700x500")
+
+        try:
+            self.df = self.load_embedded_data()
+        except FileNotFoundError:
+            error_label = ctk.CTkLabel(self, text="Error: 'processed_pipe_table.xlsx' not found.\nPlease place the file next to the program.", text_color="red", font=("Arial", 18, "bold"))
+            error_label.pack(pady=20, padx=20, expand=True, fill="both")
+            return
+
+        main_frame = ctk.CTkFrame(self)
+        main_frame.pack(pady=20, padx=20, fill="both", expand=True)
+
+        input_frame = ctk.CTkFrame(main_frame)
+        input_frame.pack(pady=10, padx=10, fill="x")
+
+        self.label_dia = ctk.CTkLabel(input_frame, text="Nominal Diameter:")
+        self.label_dia.pack(side="right", padx=(20, 2))
+
+        self.entry_dia = ctk.CTkEntry(input_frame, width=120, justify="center")
+        self.entry_dia.pack(side="right", padx=2)
+
+        self.unit_var = ctk.StringVar(value="in")
+        self.unit_selector = ctk.CTkSegmentedButton(input_frame,
+                                                    values=["in", "mm"],
+                                                    variable=self.unit_var)
+        self.unit_selector.pack(side="right", padx=(2, 20))
+
+        self.label_sch = ctk.CTkLabel(input_frame, text="Schedule Number (SCH):")
+        self.label_sch.pack(side="right", padx=(20, 2))
+
+        self.entry_sch = ctk.CTkEntry(input_frame, width=100, justify="center")
+        self.entry_sch.pack(side="right", padx=2)
+
+        button_frame = ctk.CTkFrame(main_frame)
+        button_frame.pack(pady=10, padx=10)
+
+        self.search_button = ctk.CTkButton(button_frame, text="Search", command=self.search_pipe_data)
+        self.search_button.pack(side="left", padx=5)
+
+        self.save_txt_button = ctk.CTkButton(button_frame, text="Save as TXT", command=self.save_output_as_txt)
+        self.save_txt_button.pack(side="left", padx=5)
+
+        self.output_box = ctk.CTkLabel(main_frame, text="Search results will be shown here...",
+                                       width=600, height=200,
+                                       font=("Arial", 22, "bold"),
+                                       anchor="center",
+                                       justify="center",
+                                       wraplength=600)
+        self.output_box.pack(pady=10, padx=10, fill="both", expand=True)
+
+        self.last_output_text = ""
+
+    def resource_path(self, relative_path):
+        try:
+            base_path = sys._MEIPASS
+        except Exception:
+            base_path = os.path.abspath(".")
+        return os.path.join(base_path, relative_path)
+
+    def load_embedded_data(self):
+        file_path = self.resource_path("processed_pipe_table.xlsx")
+        return pd.read_excel(file_path)
+
+    def search_pipe_data(self):
+        dia_value = self.entry_dia.get().strip()
+        sch_input = self.entry_sch.get().strip()
+        unit = self.unit_var.get()
+
+        if not dia_value or not sch_input:
+            self.output_box.configure(text="Error: Please fill both nominal diameter and schedule number fields.", text_color="red")
+            self.last_output_text = "Error: Please fill both nominal diameter and schedule number fields."
+            return
+
+        try:
+            num = float(dia_value)
+            column_name = f'nominal diameter ({unit})'
+            dia_results = self.df[self.df[column_name] == num].copy()
+            if dia_results.empty:
+                self.output_box.configure(text=f"No pipe found with nominal diameter {num} {unit}.", text_color="red")
+                self.last_output_text = f"No pipe found with nominal diameter {num} {unit}."
+                return
+
+            sch_key = sch_input.strip()
+            if sch_key.lower().startswith("sch"):
+                sch_key = sch_key[3:]
+            sch_key = sch_key.strip()
+            sch_name = f"sch{sch_key}"
+
+            thickness_col = f"{sch_name}_thickness (mm)"
+            weight_col_kg = f"{sch_name}_weight (kg)"
+            weight_col = f"{sch_name}_weight"
+
+            thickness_actual = None
+            weight_actual = None
+            for i, c in enumerate(self.df.columns):
+                if c.strip().lower() == thickness_col.strip().lower():
+                    thickness_actual = c
+                if c.strip().lower() == weight_col_kg.strip().lower():
+                    weight_actual = c
+                elif c.strip().lower() == weight_col.strip().lower():
+                    weight_actual = c
+
+            if not thickness_actual or not weight_actual:
+                sch_list = []
+                for c in self.df.columns:
+                    if "_thickness" in c:
+                        sch_name_listed = c.split('_')[0].replace("sch", "")
+                        sch_list.append(sch_name_listed)
+                sch_list_str = ', '.join(sorted(set(sch_list)))
+                self.output_box.configure(text=f"Invalid schedule number!\nAvailable schedules: {sch_list_str}", text_color="red")
+                self.last_output_text = f"Invalid schedule number!\nAvailable schedules: {sch_list_str}"
+                return
+
+            thickness = dia_results.iloc[0][thickness_actual] if thickness_actual in dia_results.columns else "N/A"
+            weight = dia_results.iloc[0][weight_actual] if weight_actual in dia_results.columns else "N/A"
+            od_col = 'nominal diameter (mm)'
+            od = dia_results.iloc[0][od_col] if od_col in dia_results.columns else "N/A"
+
+            def to_float(val):
+                try:
+                    return float(val)
+                except:
+                    return None
+
+            od_float = to_float(od)
+            thickness_float = to_float(thickness)
+            if od_float is not None and thickness_float is not None:
+                id_ = round(od_float - 2 * thickness_float, 2)
+            else:
+                id_ = "N/A"
+
+            output_text = (
+                f"Results for pipe with diameter {num} {unit} and schedule {sch_input}:\n"
+                f"- Wall thickness: {thickness} mm\n"
+                f"- Outside diameter: {od} mm\n"
+                f"- Inside diameter: {id_} mm\n"
+                f"- Weight per meter: {weight} kg/m\n"
+            )
+
+            self.output_box.configure(text=output_text, text_color="#F4E285", font=("Arial", 22, "bold"), anchor="center", justify="center")
+            self.last_output_text = output_text
+
+        except ValueError:
+            self.output_box.configure(text="Input error: Please enter a valid number for diameter.", text_color="red", font=("Arial", 22, "bold"), anchor="center", justify="center")
+            self.last_output_text = "Input error: Please enter a valid number for diameter."
+        except Exception as e:
+            self.output_box.configure(text=f"Unexpected error: {e}", text_color="red", font=("Arial", 22, "bold"), anchor="center", justify="center")
+            self.last_output_text = f"Unexpected error: {e}"
+
+    def save_output_as_txt(self):
+        if not self.last_output_text:
+            return
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt")],
+            title="Save result as TXT"
+        )
+        if not file_path:
+            return  # User cancelled
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(self.last_output_text)
+            self.output_box.configure(
+                text=self.last_output_text + f"\n\n✔ Output saved as {file_path}",
+                text_color="#4BB543", font=("Arial", 22, "bold"), anchor="center", justify="center"
+            )
+        except Exception as e:
+            self.output_box.configure(
+                text=f"Error saving output: {e}",
+                text_color="red", font=("Arial", 22, "bold"), anchor="center", justify="center"
+            )
+
+if __name__ == "__main__":
+    app = PipeApp()
+    app.mainloop()
